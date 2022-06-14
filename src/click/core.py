@@ -1231,7 +1231,6 @@ class Command(BaseCommand):
 
         if help_option is not None:
             rv = [*rv, help_option]
-
         return rv
 
     def format_usage(self, ctx: Context, formatter: HelpFormatter) -> None:
@@ -1328,6 +1327,7 @@ class Command(BaseCommand):
         """
         self.format_usage(ctx, formatter)
         self.format_help_text(ctx, formatter)
+        self.format_arguments(ctx, formatter)
         self.format_options(ctx, formatter)
         self.format_epilog(ctx, formatter)
 
@@ -1345,14 +1345,26 @@ class Command(BaseCommand):
             with formatter.indentation():
                 formatter.write_text(text)
 
+    def format_arguments(self, ctx: Context, formatter: HelpFormatter) -> None:
+        """Writes all the arguments into the formatter if they exist."""
+        opts = []
+        for param in self.get_params(ctx):
+            if param.__str__().startswith("<Argument"):
+                rv = param.get_help_record(ctx)
+                if rv is not None:
+                    opts.append(rv)
+        if opts:
+            with formatter.section(_("Arguments")):
+                formatter.write_dl(opts)
+
     def format_options(self, ctx: Context, formatter: HelpFormatter) -> None:
         """Writes all the options into the formatter if they exist."""
         opts = []
         for param in self.get_params(ctx):
-            rv = param.get_help_record(ctx)
-            if rv is not None:
-                opts.append(rv)
-
+            if param.__str__().startswith("<Option"):
+                rv = param.get_help_record(ctx)
+                if rv is not None:
+                    opts.append(rv)
         if opts:
             with formatter.section(_("Options")):
                 formatter.write_dl(opts)
@@ -2009,6 +2021,8 @@ class Parameter:
                      order of processing.
     :param envvar: a string or list of strings that are environment variables
                    that should be checked.
+    :param help: the help string.
+    :param hidden: hide this option from help outputs.
     :param shell_complete: A function that returns custom shell
         completions. Used instead of the param's type completion if
         given. Takes ``ctx, param, incomplete`` and must return a list
@@ -2062,6 +2076,8 @@ class Parameter:
         expose_value: bool = True,
         is_eager: bool = False,
         envvar: t.Optional[t.Union[str, t.Sequence[str]]] = None,
+        help: t.Optional[str] = None,
+        hidden: bool = False,
         shell_complete: t.Optional[
             t.Callable[
                 [Context, "Parameter", str],
@@ -2069,6 +2085,9 @@ class Parameter:
             ]
         ] = None,
     ) -> None:
+        if help:
+            help = inspect.cleandoc(help)
+
         self.name, self.opts, self.secondary_opts = self._parse_decls(
             param_decls or (), expose_value
         )
@@ -2091,6 +2110,8 @@ class Parameter:
         self.is_eager = is_eager
         self.metavar = metavar
         self.envvar = envvar
+        self.help = help
+        self.hidden = hidden
         self._custom_shell_complete = shell_complete
 
         if __debug__:
@@ -2154,6 +2175,7 @@ class Parameter:
             "multiple": self.multiple,
             "default": self.default,
             "envvar": self.envvar,
+            "help": self.help,
         }
 
     def __repr__(self) -> str:
@@ -2447,8 +2469,6 @@ class Option(Parameter):
                                parameter will be pulled from an environment
                                variable in case a prefix is defined on the
                                context.
-    :param help: the help string.
-    :param hidden: hide this option from help outputs.
 
     .. versionchanged:: 8.1.0
         Help text indentation is cleaned here instead of only in the
@@ -2482,15 +2502,10 @@ class Option(Parameter):
         count: bool = False,
         allow_from_autoenv: bool = True,
         type: t.Optional[t.Union[types.ParamType, t.Any]] = None,
-        help: t.Optional[str] = None,
-        hidden: bool = False,
         show_choices: bool = True,
         show_envvar: bool = False,
         **attrs: t.Any,
     ) -> None:
-        if help:
-            help = inspect.cleandoc(help)
-
         default_is_missing = "default" not in attrs
         super().__init__(param_decls, type=type, multiple=multiple, **attrs)
 
@@ -2508,7 +2523,6 @@ class Option(Parameter):
         self.confirmation_prompt = confirmation_prompt
         self.prompt_required = prompt_required
         self.hide_input = hide_input
-        self.hidden = hidden
 
         # If prompt is enabled but not required, then the option can be
         # used as a flag to indicate using prompt or flag_value.
@@ -2553,7 +2567,6 @@ class Option(Parameter):
                 self.default = 0
 
         self.allow_from_autoenv = allow_from_autoenv
-        self.help = help
         self.show_default = show_default
         self.show_choices = show_choices
         self.show_envvar = show_envvar
@@ -2586,7 +2599,6 @@ class Option(Parameter):
     def to_info_dict(self) -> t.Dict[str, t.Any]:
         info_dict = super().to_info_dict()
         info_dict.update(
-            help=self.help,
             prompt=self.prompt,
             is_flag=self.is_flag,
             flag_value=self.flag_value,
@@ -2987,6 +2999,49 @@ class Argument(Parameter):
                 f" {len(decls)}."
             )
         return name, [arg], []
+
+    def get_help_record(self, ctx: Context) -> t.Optional[t.Tuple[str, str]]:
+        if self.hidden:
+            return None
+
+        any_prefix_is_slash = False
+
+        def _write_args(opts: t.Sequence[str]) -> str:
+            nonlocal any_prefix_is_slash
+
+            rv, any_slashes = join_options(opts)
+
+            if any_slashes:
+                any_prefix_is_slash = True
+
+            rv = f"{self.make_metavar()}"
+
+            return rv
+
+        rv = [_write_args(self.opts)]
+        if self.secondary_opts:
+            rv.append(_write_args(self.secondary_opts))
+
+        help = self.help or ""
+        extra = []
+
+        if (
+            isinstance(self.type, types._NumberRangeBase)
+            # skip count with default range type
+            and not (self.count and self.type.min == 0 and self.type.max is None)
+        ):
+            range_str = self.type._describe_range()
+
+            if range_str:
+                extra.append(range_str)
+
+        if self.required:
+            extra.append(_("required"))
+
+        if extra:
+            extra_str = "; ".join(extra)
+            help = f"{help}  [{extra_str}]" if help else f"[{extra_str}]"
+        return ("; " if any_prefix_is_slash else " / ").join(rv), help
 
     def get_usage_pieces(self, ctx: Context) -> t.List[str]:
         return [self.make_metavar()]
