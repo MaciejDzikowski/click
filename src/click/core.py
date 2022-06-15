@@ -2934,7 +2934,7 @@ class Argument(Parameter):
 
     def __init__(
         self,
-        param_decls: t.Sequence[str],
+        param_decls: t.Optional[t.Sequence[str]] = None,
         required: t.Optional[bool] = None,
         **attrs: t.Any,
     ) -> None:
@@ -2964,7 +2964,7 @@ class Argument(Parameter):
             return self.metavar
         var = self.type.get_metavar(self)
         if not var:
-            var = self.name.upper()  # type: ignore
+            var = self.opts[0].upper()  # type: ignore
         if not self.required:
             var = f"[{var}]"
         if self.nargs != 1:
@@ -2981,9 +2981,13 @@ class Argument(Parameter):
         if len(decls) == 1:
             name = arg = decls[0]
             name = name.replace("-", "_").lower()
+        elif len(decls) == 2:
+            name = decls[1]
+            arg = decls[0]
+            name = name.replace("-", "_").lower()
         else:
             raise TypeError(
-                "Arguments take exactly one parameter declaration, got"
+                "Arguments can take maximally two parameters declaration, got"
                 f" {len(decls)}."
             )
         return name, [arg], []
