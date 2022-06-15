@@ -318,13 +318,14 @@ def test_defaults_for_nargs(runner):
     assert "Argument 'a' takes 2 values." in result.output
 
 
-def test_multiple_param_decls_not_allowed(runner):
+def test_three_param_decls_not_allowed(runner):
     with pytest.raises(TypeError):
 
         @click.command()
-        @click.argument("x", click.Choice(["a", "b"]))
-        def copy(x):
+        @click.argument("x", "y", click.Choice(["a", "b"]))
+        def copy(x, y):
             click.echo(x)
+            click.echo(y)
 
 
 def test_multiple_not_allowed():
